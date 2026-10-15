@@ -1,0 +1,6 @@
+{
+  "name": "DepGuard AI - Dependency Resilience Engine",
+  "description": "Inspect dependencies, map AST source usage, and verify AI-assisted migration compatibility with Gemma 4.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
