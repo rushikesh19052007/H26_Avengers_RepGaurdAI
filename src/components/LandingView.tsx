@@ -74,7 +74,7 @@ export const LandingView: React.FC<LandingViewProps> = ({ onStartScan }) => {
             <div className="flex flex-col">
               <div className="flex items-center gap-2">
                 <span className="text-[18px] md:text-[20px] text-on-surface font-bold tracking-tight">
-                  DepGuard AI
+                  RepGuard AI
                 </span>
                 <span className="font-mono text-[11px] px-1.5 py-0.5 rounded bg-surface-container text-on-surface-variant font-medium">
                   v1.4.0
@@ -414,7 +414,7 @@ export const LandingView: React.FC<LandingViewProps> = ({ onStartScan }) => {
           </div>
           <div className="flex items-center gap-3">
             <span className="text-[12px] text-on-surface-variant">
-              &copy; 2026 DepGuard Open Source Architecture
+              &copy; 2026 RepGuard Open Source Architecture
             </span>
           </div>
         </div>

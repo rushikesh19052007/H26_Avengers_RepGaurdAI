@@ -22,4 +22,5 @@ ENV/
 .pytest_cache/
 .coverage
 htmlcov/
-
+*.db
+backend/data/*.db

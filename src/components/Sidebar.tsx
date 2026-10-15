@@ -68,7 +68,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <DepGuardLogo size={32} />
               <div className="flex flex-col min-w-0">
                 <span className="font-semibold text-[16px] text-on-surface truncate leading-none group-hover:text-primary transition-colors">
-                  DepGuard AI
+                  RepGuard AI
                 </span>
                 <span className="text-[12px] text-on-surface-variant truncate mt-1">
                   Dependency Resilience

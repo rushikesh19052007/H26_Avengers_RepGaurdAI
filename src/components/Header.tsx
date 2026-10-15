@@ -64,7 +64,7 @@ export const Header: React.FC<HeaderProps> = ({
               onClick={() => onSelectView('landing')}
               className="text-on-surface-variant hover:text-primary transition-colors cursor-pointer"
             >
-              DepGuard AI
+              RepGuard AI
             </button>
             <span className="material-symbols-outlined text-[14px]">chevron_right</span>
             <button

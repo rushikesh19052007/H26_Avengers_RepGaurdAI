@@ -198,7 +198,7 @@ async def fetch_github_repo_archive(
         meta_url = f"https://api.github.com/repos/{owner}/{repo}"
         headers = {
             "Accept": "application/vnd.github.v3+json",
-            "User-Agent": "DepGuard-AI-Scanner/1.0",
+            "User-Agent": "RepGuard-AI-Scanner/1.0",
         }
         res_meta = await client.get(meta_url, headers=headers)
         if res_meta.status_code == 404:

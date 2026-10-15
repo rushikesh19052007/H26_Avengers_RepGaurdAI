@@ -10,15 +10,17 @@ from app.api.routes import router as api_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup
-    print(f"[DepGuard AI] Backend initialized. Host={settings.host}:{settings.port}, Gemma Model={settings.gemma_model}")
+    # Startup: initialize database schema
+    from app.db.database import init_db
+    init_db()
+    print(f"[RepGuard AI] Backend initialized. Host={settings.host}:{settings.port}, Gemma Model={settings.gemma_model}")
     yield
     # Shutdown
-    print("[DepGuard AI] Backend shutting down.")
+    print("[RepGuard AI] Backend shutting down.")
 
 
 app = FastAPI(
-    title="DepGuard AI — Dependency Resilience Engine",
+    title="RepGuard AI — Dependency Resilience Engine",
     description="Deterministic dependency scanning and Gemma 4 AI resilience analysis.",
     version="1.0.0",
     lifespan=lifespan,
@@ -46,7 +48,7 @@ app.include_router(api_router)
 @app.get("/")
 def read_root():
     return {
-        "service": "DepGuard AI Backend",
+        "service": "RepGuard AI Backend",
         "version": "1.0.0",
         "status": "online",
         "docs": "/docs",

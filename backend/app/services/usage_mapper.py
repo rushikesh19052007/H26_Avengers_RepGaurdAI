@@ -3,7 +3,7 @@
 import ast
 import re
 from pathlib import Path
-from typing import Dict, List, Set, Any, Optional
+from typing import Dict, List, Set, Any, Optional, Tuple
 
 # Well-known PyPI package name to top-level Python import name mappings
 PYPI_TO_IMPORT_MAP: Dict[str, List[str]] = {
@@ -46,12 +46,14 @@ class CodeUsageOccurrence:
         line_number: int,
         code_snippet: str,
         purpose: str = "Import statement",
+        kind: str = "import",  # import, call, attribute, monkey_patch, config
     ):
         self.package_name = package_name
         self.file_path = file_path.replace("\\", "/")
         self.line_number = line_number
         self.code_snippet = code_snippet
         self.purpose = purpose
+        self.kind = kind
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -60,35 +62,59 @@ class CodeUsageOccurrence:
             "line": self.line_number,
             "code": self.code_snippet,
             "purpose": self.purpose,
+            "kind": self.kind,
         }
 
 
+def _get_attribute_chain(node: ast.AST) -> List[str]:
+    """Helper to unfold attribute access e.g. a.b.c -> ['a', 'b', 'c']"""
+    parts = []
+    curr = node
+    while isinstance(curr, ast.Attribute):
+        parts.append(curr.attr)
+        curr = curr.value
+    if isinstance(curr, ast.Name):
+        parts.append(curr.id)
+    return list(reversed(parts))
+
+
 def extract_python_imports(content: str, rel_path: str) -> List[CodeUsageOccurrence]:
-    """Parse Python source file with standard ast module to extract imports and call sites."""
+    """Parse Python source file with standard ast module to extract imports, calls, attribute lookups, and monkey-patches."""
     occurrences: List[CodeUsageOccurrence] = []
     lines = content.splitlines()
 
     try:
         tree = ast.parse(content, filename=rel_path)
     except SyntaxError:
-        # Fallback to regex if file has Python syntax error (e.g. Python 2 or template)
+        # Fallback to regex if file has Python syntax error
         return extract_python_imports_regex(lines, rel_path)
 
+    # Track locally bound symbols -> package name
+    bound_symbols: Dict[str, str] = {}
+    seen_sites: Set[Tuple[str, int, str]] = set()  # (package, line, kind)
+
+    # Pass 1: Collect imports
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             line_no = getattr(node, "lineno", 1)
             code_line = lines[line_no - 1].strip() if line_no <= len(lines) else "import ..."
             for alias in node.names:
                 root_module = alias.name.split(".")[0]
-                occurrences.append(
-                    CodeUsageOccurrence(
-                        package_name=root_module,
-                        file_path=rel_path,
-                        line_number=line_no,
-                        code_snippet=code_line,
-                        purpose=f"Direct import of module '{alias.name}'",
+                bound_as = alias.asname or root_module
+                bound_symbols[bound_as] = root_module
+                site_key = (root_module, line_no, "import")
+                if site_key not in seen_sites:
+                    seen_sites.add(site_key)
+                    occurrences.append(
+                        CodeUsageOccurrence(
+                            package_name=root_module,
+                            file_path=rel_path,
+                            line_number=line_no,
+                            code_snippet=code_line,
+                            purpose=f"Direct import of module '{alias.name}'",
+                            kind="import",
+                        )
                     )
-                )
 
         elif isinstance(node, ast.ImportFrom):
             line_no = getattr(node, "lineno", 1)
@@ -96,15 +122,95 @@ def extract_python_imports(content: str, rel_path: str) -> List[CodeUsageOccurre
             if node.module:
                 root_module = node.module.split(".")[0]
                 imported_names = ", ".join(a.name for a in node.names[:3])
-                occurrences.append(
-                    CodeUsageOccurrence(
-                        package_name=root_module,
-                        file_path=rel_path,
-                        line_number=line_no,
-                        code_snippet=code_line,
-                        purpose=f"Import symbols [{imported_names}] from '{node.module}'",
+                for alias in node.names:
+                    bound_name = alias.asname or alias.name
+                    bound_symbols[bound_name] = root_module
+
+                site_key = (root_module, line_no, "import")
+                if site_key not in seen_sites:
+                    seen_sites.add(site_key)
+                    occurrences.append(
+                        CodeUsageOccurrence(
+                            package_name=root_module,
+                            file_path=rel_path,
+                            line_number=line_no,
+                            code_snippet=code_line,
+                            purpose=f"Import symbols [{imported_names}] from '{node.module}'",
+                            kind="import",
+                        )
                     )
-                )
+
+    if not bound_symbols:
+        return occurrences
+
+    # Pass 2: Trace monkey-patching, calls, and attribute lookups
+    for node in ast.walk(tree):
+        line_no = getattr(node, "lineno", 1)
+        code_line = lines[line_no - 1].strip() if line_no <= len(lines) else ""
+
+        # 2a. Detect monkey patching in assignments (e.g. requests.Session.request = _request)
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Attribute):
+                    chain = _get_attribute_chain(target)
+                    if chain and chain[0] in bound_symbols:
+                        pkg = bound_symbols[chain[0]]
+                        target_str = ".".join(chain)
+                        site_key = (pkg, line_no, "monkey_patch")
+                        if site_key not in seen_sites:
+                            seen_sites.add(site_key)
+                            occurrences.append(
+                                CodeUsageOccurrence(
+                                    package_name=pkg,
+                                    file_path=rel_path,
+                                    line_number=line_no,
+                                    code_snippet=code_line,
+                                    purpose=f"Monkey patch assignment to '{target_str}'",
+                                    kind="monkey_patch",
+                                )
+                            )
+
+        # 2b. Detect call sites (e.g. session.get(), requests.get(), Environment())
+        elif isinstance(node, ast.Call):
+            chain = _get_attribute_chain(node.func)
+            if chain and chain[0] in bound_symbols:
+                pkg = bound_symbols[chain[0]]
+                call_target = ".".join(chain)
+                site_key = (pkg, line_no, "call")
+                if site_key not in seen_sites:
+                    seen_sites.add(site_key)
+                    occurrences.append(
+                        CodeUsageOccurrence(
+                            package_name=pkg,
+                            file_path=rel_path,
+                            line_number=line_no,
+                            code_snippet=code_line,
+                            purpose=f"Call site: {call_target}()",
+                            kind="call",
+                        )
+                    )
+
+        # 2c. Detect attribute lookups (e.g. requests.utils._parse_content_type_header)
+        elif isinstance(node, ast.Attribute):
+            chain = _get_attribute_chain(node)
+            if len(chain) > 1 and chain[0] in bound_symbols:
+                pkg = bound_symbols[chain[0]]
+                attr_target = ".".join(chain)
+                # Especially flag private attribute access or deep accesses
+                if any(part.startswith("_") for part in chain[1:]):
+                    site_key = (pkg, line_no, "attribute")
+                    if site_key not in seen_sites:
+                        seen_sites.add(site_key)
+                        occurrences.append(
+                            CodeUsageOccurrence(
+                                package_name=pkg,
+                                file_path=rel_path,
+                                line_number=line_no,
+                                code_snippet=code_line,
+                                purpose=f"Private/internal attribute access '{attr_target}'",
+                                kind="attribute",
+                            )
+                        )
 
     return occurrences
 

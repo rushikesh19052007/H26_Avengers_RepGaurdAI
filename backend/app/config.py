@@ -27,6 +27,14 @@ class Settings(BaseModel):
     port: int = int(os.getenv("PORT", "8000"))
     environment: str = os.getenv("ENVIRONMENT", "development")
 
+    # Database & Persistence
+    database_url: str = os.getenv("DATABASE_URL", "sqlite:///./data/depguard.db")
+
+    # Target Python environments & risk thresholds
+    target_pythons: str = os.getenv("TARGET_PYTHONS", "3.12,3.13")
+    stale_months_threshold: int = int(os.getenv("STALE_MONTHS_THRESHOLD", "24"))
+    github_token: str = os.getenv("GITHUB_TOKEN", "")
+
     # Safety & Limits
     max_upload_size_mb: int = int(os.getenv("MAX_UPLOAD_SIZE_MB", "25"))
     max_uncompressed_size_mb: int = int(os.getenv("MAX_UNCOMPRESSED_SIZE_MB", "60"))

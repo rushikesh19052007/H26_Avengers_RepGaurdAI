@@ -1,0 +1,136 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "DepGuard Dependency Exit Capsule Schema",
+  "description": "Standardized 9-section Dependency Exit Capsule schema for Hacktoberfest 26 Track 1 (Gemma 4: Dependency Resilience).",
+  "type": "object",
+  "required": [
+    "capsule_version",
+    "generator",
+    "timestamp",
+    "section_1_executive_summary",
+    "section_2_target_environment_profile",
+    "section_3_dependency_inventory",
+    "section_4_risk_matrix",
+    "section_5_migration_plan",
+    "section_6_verification_and_comparison",
+    "section_7_compatibility_gaps",
+    "section_8_unresolved_risks",
+    "section_9_provenance_and_audit"
+  ],
+  "properties": {
+    "capsule_version": { "type": "string" },
+    "generator": { "type": "string" },
+    "timestamp": { "type": "string" },
+    "section_1_executive_summary": {
+      "type": "object",
+      "required": ["repository_name", "repository_url", "health_score", "total_dependencies"],
+      "properties": {
+        "repository_name": { "type": "string" },
+        "repository_url": { "type": "string" },
+        "branch": { "type": "string" },
+        "commit_sha": { "type": "string" },
+        "health_score": { "type": "integer" },
+        "total_dependencies": { "type": "integer" },
+        "high_risk_count": { "type": "integer" },
+        "needs_review_count": { "type": "integer" },
+        "healthy_count": { "type": "integer" },
+        "total_ast_call_sites": { "type": "integer" },
+        "scanned_files_count": { "type": "integer" },
+        "ai_assessment": { "type": ["string", "null"] }
+      }
+    },
+    "section_2_target_environment_profile": {
+      "type": "object",
+      "required": ["target_pythons", "incompatible_pythons", "discovered_manifests"],
+      "properties": {
+        "target_pythons": { "type": "array", "items": { "type": "string" } },
+        "incompatible_pythons": { "type": "array", "items": { "type": "string" } },
+        "incompatible_warning": { "type": "string" },
+        "discovered_manifests": { "type": "array", "items": { "type": "string" } },
+        "scanned_files_count": { "type": "integer" }
+      }
+    },
+    "section_3_dependency_inventory": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "version", "ecosystem", "manifest"],
+        "properties": {
+          "name": { "type": "string" },
+          "version": { "type": "string" },
+          "target_version": { "type": ["string", "null"] },
+          "ecosystem": { "type": "string" },
+          "manifest": { "type": "string" },
+          "line_number": { "type": "integer" },
+          "is_direct": { "type": "boolean" },
+          "is_dev": { "type": "boolean" },
+          "is_commented": { "type": "boolean" },
+          "ast_call_sites": { "type": "integer" },
+          "ast_files": { "type": "integer" }
+        }
+      }
+    },
+    "section_4_risk_matrix": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "severity", "reason", "provenance_facts"],
+        "properties": {
+          "name": { "type": "string" },
+          "severity": { "type": "string", "enum": ["High", "Needs Review", "Low"] },
+          "reason": { "type": "string" },
+          "status": { "type": "string" },
+          "provenance_facts": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["type", "text"],
+              "properties": {
+                "type": { "type": "string" },
+                "text": { "type": "string" },
+                "is_warning": { "type": "boolean" },
+                "source": { "type": ["string", "null"] },
+                "source_url": { "type": ["string", "null"] }
+              }
+            }
+          }
+        }
+      }
+    },
+    "section_5_migration_plan": {
+      "type": "object",
+      "properties": {
+        "strategy_summary": { "type": "string" },
+        "dependency_plans": { "type": "array" },
+        "unified_diff": { "type": "string" },
+        "manifest_updates": { "type": "object" },
+        "compatibility_warnings": { "type": "array" }
+      }
+    },
+    "section_6_verification_and_comparison": {
+      "type": "object",
+      "properties": {
+        "original_verification": { "type": "object" },
+        "ab_comparison": { "type": ["object", "null"] }
+      }
+    },
+    "section_7_compatibility_gaps": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "section_8_unresolved_risks": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "section_9_provenance_and_audit": {
+      "type": "object",
+      "required": ["ai_model", "thinking_mode", "facts_strictly_partitioned", "disclaimer"],
+      "properties": {
+        "ai_model": { "type": "string" },
+        "thinking_mode": { "type": "string" },
+        "facts_strictly_partitioned": { "type": "boolean" },
+        "disclaimer": { "type": "string" }
+      }
+    }
+  }
+}

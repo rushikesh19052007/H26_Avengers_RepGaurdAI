@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 class HealthResponse(BaseModel):
     status: str = "healthy"
     version: str = "1.0.0"
-    service: str = "DepGuard AI"
+    service: str = "RepGuard AI"
     model: str
     fallback_model: str
     thinking_level: str
@@ -65,10 +65,11 @@ class ScanStatusResponse(BaseModel):
 # Evidence & AST Schemas
 # ---------------------------------------------------------------------------
 class RiskFact(BaseModel):
-    type: Literal["OBSERVED", "INFERRED", "UNRESOLVED"]
+    type: Literal["OBSERVED", "INFERRED", "UNRESOLVED", "REGISTRY", "OSV", "GITHUB"]
     text: str
     isWarning: bool = False
     source: Optional[str] = None
+    source_url: Optional[str] = None
 
 
 class CodeSnippet(BaseModel):
@@ -76,6 +77,7 @@ class CodeSnippet(BaseModel):
     line: int
     purpose: str
     code: str
+    kind: Optional[str] = "import"
 
 
 class DiffSnippet(BaseModel):
@@ -87,10 +89,10 @@ class MigrationRecommendation(BaseModel):
     title: str
     targetPackages: List[str] = Field(default_factory=list)
     description: str
-    confidence: float = 0.95
-    estimatedSynthesisTime: str = "1.2s"
-    astTransformAvailable: bool = True
-    diffSnippet: DiffSnippet
+    confidence: Optional[float] = None
+    estimatedSynthesisTime: Optional[str] = None
+    astTransformAvailable: bool = False
+    diffSnippet: Optional[DiffSnippet] = None
 
 
 # ---------------------------------------------------------------------------
@@ -118,6 +120,37 @@ class GemmaAnalysisResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Multi-Dependency Migration Planning Schemas
+# ---------------------------------------------------------------------------
+class MigrationPlanRequest(BaseModel):
+    dependencies: List[str] = Field(default_factory=list)
+    target_python: str = "3.12"
+    custom_instructions: Optional[str] = None
+
+
+class DependencyPlanItem(BaseModel):
+    package_name: str
+    current_version: str
+    proposed_version: str
+    action: Literal["upgrade", "replace", "remove", "keep"]
+    rationale: str
+    code_transformations: List[str] = Field(default_factory=list)
+    test_instructions: List[str] = Field(default_factory=list)
+
+
+class MultiDepMigrationPlanResponse(BaseModel):
+    plan_id: str
+    scan_id: str
+    target_python: str
+    strategy_summary: str
+    dependency_plans: List[DependencyPlanItem] = Field(default_factory=list)
+    unified_diff: str
+    manifest_updates: Dict[str, str] = Field(default_factory=dict)
+    compatibility_warnings: List[str] = Field(default_factory=list)
+    created_at: str
+
+
+# ---------------------------------------------------------------------------
 # Scanned Dependency Item
 # ---------------------------------------------------------------------------
 class DiscoveredDependency(BaseModel):
@@ -130,15 +163,18 @@ class DiscoveredDependency(BaseModel):
     riskReason: str
     evidenceSource: str
     declaredManifest: str
+    line_number: int = 1
     astCallSites: int = 0
     astFiles: int = 0
-    status: Literal["Verified", "Failed", "Not tested"] = "Not tested"
+    status: Literal["Verified", "Failed", "Not tested", "Gaps found"] = "Not tested"
     statusDetails: Optional[str] = None
     codeSnippets: List[CodeSnippet] = Field(default_factory=list)
     facts: List[RiskFact] = Field(default_factory=list)
     migrationRecommendation: Optional[MigrationRecommendation] = None
     aiConfidence: Optional[float] = None
     isDirect: bool = True
+    isDev: bool = False
+    isCommented: bool = False
 
 
 class ScanSummary(BaseModel):
@@ -149,6 +185,7 @@ class ScanSummary(BaseModel):
     astCallSites: int
     scannedFilesCount: int
     verifiedPassing: int
+    healthScore: int = 100
 
 
 # ---------------------------------------------------------------------------
@@ -171,6 +208,18 @@ class ScanResultsResponse(BaseModel):
     limitations: List[str] = Field(default_factory=list)
 
 
+class ScanListItem(BaseModel):
+    scan_id: str
+    repo_name: str
+    repo_url: Optional[str] = None
+    branch: str
+    status: str
+    created_at: str
+    dependencies_count: int
+    high_risk_count: int
+    health_score: int
+
+
 class VerificationResponse(BaseModel):
     scan_id: str
     test_framework: str
@@ -179,5 +228,41 @@ class VerificationResponse(BaseModel):
     duration_seconds: float = 0.0
     status: Literal["passed", "failed", "skipped"]
     stdout_summary: str
+    passed_count: int = 0
+    failed_count: int = 0
+    error_count: int = 0
     compatibility_gaps: List[str] = Field(default_factory=list)
     sandbox_isolated: bool = True
+
+
+# ---------------------------------------------------------------------------
+# A/B Comparison Schemas
+# ---------------------------------------------------------------------------
+class ComparisonRequest(BaseModel):
+    plan_id: Optional[str] = None
+    patch: Optional[str] = None
+    python_version: str = "3.12"
+
+
+class ComparisonResponse(BaseModel):
+    scan_id: str
+    python_version: str
+    original_status: str
+    original_passed: int
+    original_failed: int
+    original_errors: int
+    original_duration: float
+    replacement_status: str
+    replacement_passed: int
+    replacement_failed: int
+    replacement_errors: int
+    replacement_duration: float
+    delta_passed: int
+    delta_failed: int
+    newly_passing: List[str] = Field(default_factory=list)
+    newly_failing: List[str] = Field(default_factory=list)
+    compatibility_gaps: List[str] = Field(default_factory=list)
+    unresolved_risks: List[str] = Field(default_factory=list)
+    verdict: Literal["IMPROVED", "REGRESSED", "INCONCLUSIVE", "IDENTICAL"]
+    summary_text: str
+

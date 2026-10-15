@@ -23,6 +23,8 @@ class ParsedManifestDependency:
         category: str = "runtime",
         line_number: int = 1,
         is_direct: bool = True,
+        is_commented: bool = False,
+        is_dev: bool = False,
     ):
         self.name = name.strip()
         self.specifier = specifier.strip()
@@ -31,6 +33,8 @@ class ParsedManifestDependency:
         self.category = category
         self.line_number = line_number
         self.is_direct = is_direct
+        self.is_commented = is_commented
+        self.is_dev = is_dev or (category == "development")
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -41,18 +45,46 @@ class ParsedManifestDependency:
             "category": self.category,
             "line_number": self.line_number,
             "is_direct": self.is_direct,
+            "is_commented": self.is_commented,
+            "is_dev": self.is_dev,
         }
 
 
 def parse_requirements_txt(content: str, rel_path: str) -> List[ParsedManifestDependency]:
-    """Parse standard requirements.txt lines."""
+    """Parse standard requirements.txt lines including commented-out dependencies."""
     results: List[ParsedManifestDependency] = []
     lines = content.splitlines()
+    is_dev_file = any(kw in rel_path.lower() for kw in ["dev", "test", "lint", "ci"])
 
     for idx, raw_line in enumerate(lines, start=1):
         line = raw_line.strip()
-        # Skip empty lines, comments, and flags
-        if not line or line.startswith("#") or line.startswith("-") or line.startswith("--"):
+        if not line:
+            continue
+
+        # Check for commented-out dependencies (e.g. # PyYAML==5.1)
+        if line.startswith("#"):
+            comment_match = re.match(r"^#\s*([a-zA-Z0-9_.-]+)(?:\[.*?\])?\s*([=><!~^].*)?$", line)
+            if comment_match:
+                pkg_name = comment_match.group(1).lower()
+                spec = (comment_match.group(2) or "unpinned").strip()
+                category = "development" if is_dev_file else "runtime"
+                results.append(
+                    ParsedManifestDependency(
+                        name=pkg_name,
+                        specifier=spec,
+                        manifest_path=rel_path,
+                        ecosystem="pypi",
+                        category=category,
+                        line_number=idx,
+                        is_direct=True,
+                        is_commented=True,
+                        is_dev=is_dev_file,
+                    )
+                )
+            continue
+
+        # Skip options like -r other.txt, -f, --index-url
+        if line.startswith("-") or line.startswith("--"):
             continue
 
         # Strip inline comments and environment markers
@@ -61,7 +93,7 @@ def parse_requirements_txt(content: str, rel_path: str) -> List[ParsedManifestDe
         if not cleaned:
             continue
 
-        # Ignore VCS URLs or paths
+        # Ignore VCS URLs or local paths
         if any(cleaned.startswith(p) for p in ["git+", "hg+", "svn+", "bzr+", "http://", "https://", "./", "../"]):
             continue
 
@@ -70,7 +102,7 @@ def parse_requirements_txt(content: str, rel_path: str) -> List[ParsedManifestDe
         if match:
             pkg_name = match.group(1).lower()
             spec = (match.group(2) or "latest").strip()
-            category = "development" if "dev" in rel_path.lower() or "test" in rel_path.lower() else "runtime"
+            category = "development" if is_dev_file else "runtime"
             results.append(
                 ParsedManifestDependency(
                     name=pkg_name,
@@ -79,6 +111,9 @@ def parse_requirements_txt(content: str, rel_path: str) -> List[ParsedManifestDe
                     ecosystem="pypi",
                     category=category,
                     line_number=idx,
+                    is_direct=True,
+                    is_commented=False,
+                    is_dev=is_dev_file,
                 )
             )
 

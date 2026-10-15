@@ -1,5 +1,6 @@
 """Deterministic dependency analyzer combining manifest declarations, AST usages, and Gemma 4 AI insights."""
 
+import asyncio
 import logging
 from pathlib import Path
 from typing import Dict, List, Any, Optional, Tuple
@@ -24,6 +25,8 @@ from app.services.usage_mapper import (
 )
 from app.services.gemma_service import GemmaService, GemmaServiceError
 
+from app.services.registry_service import RegistryService
+
 logger = logging.getLogger("depguard.analyzer")
 
 # Programmatically known Python 3.12 & 3.13 removals / deprecations (Deterministic Rules)
@@ -44,7 +47,7 @@ PYTHON_REMOVAL_FLAGS: Dict[str, Dict[str, Any]] = {
     },
     "nose": {
         "severity": "High",
-        "reason": "Deprecated test framework incompatible with Python 3.12+ test discovery.",
+        "reason": "Unmaintained test runner incompatible with Python 3.12+ (ModuleNotFoundError: No module named 'imp').",
         "target": "pytest>=8.0.0",
         "replacements": ["pytest"],
         "category": "maintenance",
@@ -81,10 +84,15 @@ PYTHON_REMOVAL_FLAGS: Dict[str, Dict[str, Any]] = {
 
 
 class DependencyAnalyzer:
-    """Orchestrates deterministic manifest discovery, AST usage mapping, and AI analysis."""
+    """Orchestrates deterministic manifest discovery, AST usage mapping, registry telemetry, and AI analysis."""
 
-    def __init__(self, gemma_service: Optional[GemmaService] = None):
+    def __init__(
+        self,
+        gemma_service: Optional[GemmaService] = None,
+        registry_service: Optional[RegistryService] = None,
+    ):
         self.gemma_service = gemma_service or GemmaService()
+        self.registry_service = registry_service or RegistryService()
 
     async def analyze_repository(
         self,
@@ -106,7 +114,6 @@ class DependencyAnalyzer:
         # 3. If no manifests found, infer from source imports
         if not manifest_deps:
             limitations.append("No recognized manifest found (requirements.txt, pyproject.toml, package.json).")
-            # Create synthetic dependencies for detected non-standard library modules
             std_lib = {
                 "os", "sys", "re", "json", "time", "math", "typing", "pathlib", "collections",
                 "itertools", "functools", "logging", "unittest", "tempfile", "shutil", "io",
@@ -126,7 +133,25 @@ class DependencyAnalyzer:
                         )
                     )
 
-        # 4. Correlate manifest declarations with source usages
+        # Detect cross-manifest conflicts (e.g. pydantic==1.10.13 in requirements.txt vs pydantic>=2 in pyproject.toml)
+        manifest_by_name: Dict[str, List[ParsedManifestDependency]] = {}
+        for d in manifest_deps:
+            manifest_by_name.setdefault(d.name.lower(), []).append(d)
+
+        # 4. Concurrently query Registry & OSV intelligence for all dependencies
+        intel_tasks = [
+            self.registry_service.get_package_intel(dep.name, dep.specifier, dep.ecosystem)
+            for dep in manifest_deps
+        ]
+        intel_results = await asyncio.gather(*intel_tasks, return_exceptions=True)
+        intel_by_pkg: Dict[str, Dict[str, Any]] = {}
+        for dep, intel in zip(manifest_deps, intel_results):
+            if isinstance(intel, dict):
+                intel_by_pkg[dep.name.lower()] = intel
+            else:
+                intel_by_pkg[dep.name.lower()] = {}
+
+        # 5. Correlate manifest declarations with source usages and registry telemetry
         evidence_payload: List[Dict[str, Any]] = []
         base_dependencies: List[Dict[str, Any]] = []
 
@@ -135,9 +160,17 @@ class DependencyAnalyzer:
             call_sites_count = len(occurrences)
             affected_files = sorted(list({occ.file_path for occ in occurrences}))
 
-            # Deterministic compatibility flags
             lower_name = dep.name.lower()
             known_flag = PYTHON_REMOVAL_FLAGS.get(lower_name)
+            pkg_intel = intel_by_pkg.get(lower_name, {})
+
+            # Check cross-manifest conflict
+            all_decls = manifest_by_name.get(lower_name, [])
+            manifest_conflict: Optional[str] = None
+            if len(all_decls) > 1:
+                specifiers = {d.specifier for d in all_decls}
+                if len(specifiers) > 1:
+                    manifest_conflict = f"Conflicting declarations: " + ", ".join(f"{d.manifest_path} specifies '{d.specifier}'" for d in all_decls)
 
             evidence_item = {
                 "package_name": dep.name,
@@ -146,7 +179,9 @@ class DependencyAnalyzer:
                 "category": dep.category,
                 "call_sites_count": call_sites_count,
                 "affected_files": affected_files[:5],
-                "deterministic_issue": known_flag["reason"] if known_flag else None,
+                "deterministic_issue": known_flag["reason"] if known_flag else manifest_conflict,
+                "is_commented": dep.is_commented,
+                "osv_advisories": [v.get("cve_id") for v in pkg_intel.get("osv_vulnerabilities", [])],
             }
             evidence_payload.append(evidence_item)
 
@@ -156,9 +191,11 @@ class DependencyAnalyzer:
                 "occurrences": occurrences,
                 "affected_files": affected_files,
                 "known_flag": known_flag,
+                "manifest_conflict": manifest_conflict,
+                "pkg_intel": pkg_intel,
             })
 
-        # 5. Invoke Gemma 4 for intelligent dependency resilience assessment
+        # 6. Invoke Gemma 4 for intelligent dependency resilience assessment
         ai_response: Optional[GemmaAnalysisResponse] = None
         ai_assessment: Optional[str] = None
         ai_model_used: Optional[str] = None
@@ -179,13 +216,12 @@ class DependencyAnalyzer:
                 logger.warning("Unexpected error during AI analysis: %s", e)
                 limitations.append("AI reasoning unavailable; relying on deterministic scan evidence.")
 
-        # Index AI findings by package name
         ai_findings_by_pkg: Dict[str, Any] = {}
         if ai_response and ai_response.findings:
             for f in ai_response.findings:
                 ai_findings_by_pkg[f.package_name.lower()] = f
 
-        # 6. Assemble final DiscoveredDependency objects
+        # 7. Assemble final DiscoveredDependency objects with provenance-tagged facts
         final_dependencies: List[DiscoveredDependency] = []
 
         for item in base_dependencies:
@@ -193,14 +229,34 @@ class DependencyAnalyzer:
             occurrences: List[CodeUsageOccurrence] = item["occurrences"]
             affected_files: List[str] = item["affected_files"]
             known_flag = item["known_flag"]
+            manifest_conflict = item["manifest_conflict"]
+            pkg_intel = item["pkg_intel"]
             lower_name = dep.name.lower()
 
             ai_finding = ai_findings_by_pkg.get(lower_name)
+            pypi_info = pkg_intel.get("pypi", {})
+            osv_vulns = pkg_intel.get("osv_vulnerabilities", [])
+
+            # Check specific LinkWatch issues dynamically:
+            # 1. Jinja2 2.11.3 soft_unicode failure
+            is_jinja_issue = lower_name == "jinja2" and (dep.specifier.startswith("2.") or dep.specifier.startswith("==2."))
+            # 2. IDNA 2.7 CVE-2024-3651
+            has_cve = len(osv_vulns) > 0
 
             # Determine Risk Severity
             if known_flag:
                 risk_severity = known_flag["severity"]
                 risk_reason = known_flag["reason"]
+            elif manifest_conflict:
+                risk_severity = "High"
+                risk_reason = manifest_conflict
+            elif is_jinja_issue:
+                risk_severity = "High"
+                risk_reason = "Jinja2 2.11.3 fails with modern MarkupSafe: soft_unicode was removed from markupsafe. Upgrade to jinja2>=3.1.4."
+            elif has_cve:
+                risk_severity = "High"
+                cve_names = ", ".join(v.get("cve_id", "vulnerability") for v in osv_vulns[:2])
+                risk_reason = f"Security vulnerability identified ({cve_names}): {osv_vulns[0].get('summary', 'Known vulnerability')}"
             elif ai_finding:
                 level = ai_finding.risk_level.lower()
                 if level in ("critical", "high"):
@@ -213,6 +269,9 @@ class DependencyAnalyzer:
             elif dep.specifier.startswith("0.") or dep.specifier.startswith("1.0"):
                 risk_severity = "Needs Review"
                 risk_reason = f"Legacy version constraint ({dep.specifier}). Review compatibility with Python 3.12+."
+            elif dep.is_commented:
+                risk_severity = "Low"
+                risk_reason = f"Commented out in {dep.manifest_path} (not loaded at runtime)."
             else:
                 risk_severity = "Low"
                 risk_reason = f"Declared in {dep.manifest_path} with standard runtime compatibility."
@@ -220,13 +279,14 @@ class DependencyAnalyzer:
             # Build Code Snippets
             code_snippets: List[CodeSnippet] = []
             if occurrences:
-                for occ in occurrences[:4]:
+                for occ in occurrences[:5]:
                     code_snippets.append(
                         CodeSnippet(
                             file=occ.file_path,
                             line=occ.line_number,
                             purpose=occ.purpose,
                             code=occ.code_snippet,
+                            kind=occ.kind,
                         )
                     )
             else:
@@ -236,43 +296,125 @@ class DependencyAnalyzer:
                         line=dep.line_number,
                         purpose=f"Manifest declaration in {dep.manifest_path}",
                         code=f"{dep.name}=={dep.specifier}",
+                        kind="config",
                     )
                 )
 
-            # Build Facts distinguishing Observed vs Inferred
-            facts: List[RiskFact] = [
+            # Build Provenance Facts (OBSERVED, REGISTRY, OSV, GITHUB, INFERRED)
+            facts: List[RiskFact] = []
+
+            # 1. Manifest OBSERVED fact
+            comment_tag = " [Commented out]" if dep.is_commented else ""
+            facts.append(
                 RiskFact(
                     type="OBSERVED",
-                    text=f"Manifest declaration: {dep.name} ({dep.specifier}) in {dep.manifest_path}:{dep.line_number}",
+                    text=f"Manifest declaration: {dep.name} ({dep.specifier}){comment_tag} in {dep.manifest_path}:{dep.line_number}",
                     isWarning=risk_severity == "High",
                     source=f"{dep.manifest_path}:{dep.line_number}",
                 )
-            ]
+            )
 
+            # 2. AST OBSERVED facts
             if occurrences:
+                monkey_patches = [o for o in occurrences if o.kind == "monkey_patch"]
+                calls = [o for o in occurrences if o.kind == "call"]
+                attrs = [o for o in occurrences if o.kind == "attribute"]
+
                 facts.append(
                     RiskFact(
                         type="OBSERVED",
-                        text=f"Traced {len(occurrences)} active import occurrences across {len(affected_files)} source files ({', '.join(affected_files[:3])}).",
+                        text=f"Traced {len(occurrences)} active code references across {len(affected_files)} source files ({', '.join(affected_files[:3])}).",
                         isWarning=False,
                         source=affected_files[0] if affected_files else None,
                     )
                 )
+
+                if monkey_patches:
+                    for mp in monkey_patches[:2]:
+                        facts.append(
+                            RiskFact(
+                                type="OBSERVED",
+                                text=f"Active monkey patching detected: {mp.purpose} at {mp.file_path}:{mp.line_number}",
+                                isWarning=True,
+                                source=f"{mp.file_path}:{mp.line_number}",
+                            )
+                        )
+                if attrs:
+                    for at in attrs[:2]:
+                        facts.append(
+                            RiskFact(
+                                type="OBSERVED",
+                                text=f"Internal / private attribute lookup: {at.purpose} at {at.file_path}:{at.line_number}",
+                                isWarning=False,
+                                source=f"{at.file_path}:{at.line_number}",
+                            )
+                        )
             else:
                 facts.append(
                     RiskFact(
                         type="INFERRED",
-                        text=f"No direct top-level import statement detected in scanned repository source files for '{dep.name}'.",
+                        text=f"No direct code imports or calls detected in scanned source files for '{dep.name}' (potential phantom or transitive requirement).",
                         isWarning=False,
                     )
                 )
 
+            # 3. Cross-manifest conflict fact
+            if manifest_conflict:
+                facts.append(
+                    RiskFact(
+                        type="OBSERVED",
+                        text=manifest_conflict,
+                        isWarning=True,
+                        source=dep.manifest_path,
+                    )
+                )
+
+            # 4. PyPI REGISTRY facts
+            if pypi_info.get("exists"):
+                latest_v = pypi_info.get("latest_version")
+                rel_date = pypi_info.get("latest_release_date", "unknown")
+                req_py = pypi_info.get("requires_python") or "unspecified"
+                pypi_url = pypi_info.get("pypi_url")
+                facts.append(
+                    RiskFact(
+                        type="REGISTRY",
+                        text=f"PyPI release telemetry: latest version is {latest_v} (published {rel_date}). Declared requires-python: '{req_py}'.",
+                        isWarning=False,
+                        source="pypi.org",
+                        source_url=pypi_url,
+                    )
+                )
+                if pypi_info.get("is_stale"):
+                    facts.append(
+                        RiskFact(
+                            type="REGISTRY",
+                            text=f"PyPI inactivity: No package updates released in over 24 months (last upload: {rel_date}).",
+                            isWarning=True,
+                            source="pypi.org",
+                            source_url=pypi_url,
+                        )
+                    )
+
+            # 5. OSV Security facts
+            if osv_vulns:
+                for v in osv_vulns[:3]:
+                    facts.append(
+                        RiskFact(
+                            type="OSV",
+                            text=f"Vulnerability {v.get('cve_id')}: {v.get('summary')} (Fixed in: {', '.join(v.get('fixed_versions', [])) or 'unspecified'})",
+                            isWarning=True,
+                            source="osv.dev",
+                            source_url=v.get("source_url"),
+                        )
+                    )
+
+            # 6. Gemma AI Inferred facts
             if ai_finding and ai_finding.evidence:
                 for ev in ai_finding.evidence[:2]:
                     facts.append(
                         RiskFact(
                             type="INFERRED",
-                            text=f"Gemma 4 observation: {ev}",
+                            text=f"Gemma 4 reasoning: {ev}",
                             isWarning=risk_severity == "High",
                         )
                     )
@@ -286,11 +428,11 @@ class DependencyAnalyzer:
                     targetPackages=target_pkgs,
                     description=ai_finding.reasoning_summary,
                     confidence=ai_finding.confidence,
-                    estimatedSynthesisTime="1.2s",
-                    astTransformAvailable=True,
+                    estimatedSynthesisTime=None,
+                    astTransformAvailable=len(affected_files) > 0,
                     diffSnippet=DiffSnippet(
-                        original=f"- import {dep.name}",
-                        replacement=f"+ import {target_pkgs[0]}  # Gemma 4 recipe",
+                        original=f"- {dep.name}=={dep.specifier}",
+                        replacement=f"+ {target_pkgs[0]}",
                     ),
                 )
             elif known_flag:
@@ -299,41 +441,63 @@ class DependencyAnalyzer:
                     targetPackages=known_flag["replacements"],
                     description=known_flag["reason"],
                     confidence=0.98,
-                    estimatedSynthesisTime="0.8s",
-                    astTransformAvailable=True,
+                    estimatedSynthesisTime=None,
+                    astTransformAvailable=len(affected_files) > 0,
                     diffSnippet=DiffSnippet(
-                        original=f"- import {dep.name}",
-                        replacement=f"+ import {known_flag['replacements'][0]}",
+                        original=f"- {dep.name}=={dep.specifier}",
+                        replacement=f"+ {known_flag['replacements'][0]}",
                     ),
                 )
-            else:
+            elif is_jinja_issue:
                 migration_rec = MigrationRecommendation(
-                    title=f"Maintain {dep.name} runtime pin",
-                    targetPackages=[dep.name],
-                    description=f"Package {dep.name} shows no severe breaking changes for the target runtime environment.",
-                    confidence=0.92,
-                    estimatedSynthesisTime="0.5s",
+                    title="Upgrade Jinja2 for MarkupSafe compatibility",
+                    targetPackages=["jinja2>=3.1.4"],
+                    description="Jinja2 2.11.3 SoftUnicode error on Python 3.12 with MarkupSafe>=2.1. Upgrade to jinja2>=3.1.4.",
+                    confidence=0.99,
+                    estimatedSynthesisTime=None,
+                    astTransformAvailable=True,
+                    diffSnippet=DiffSnippet(
+                        original="- Jinja2==2.11.3",
+                        replacement="+ Jinja2>=3.1.4",
+                    ),
+                )
+            elif has_cve:
+                fixed_ver = osv_vulns[0].get("fixed_versions", [f">={dep.specifier}"])[0] if osv_vulns[0].get("fixed_versions") else "latest"
+                migration_rec = MigrationRecommendation(
+                    title=f"Remediate security advisory in {dep.name}",
+                    targetPackages=[f"{dep.name}>={fixed_ver}"],
+                    description=f"Patch {osv_vulns[0].get('cve_id')} by upgrading {dep.name}.",
+                    confidence=0.95,
+                    estimatedSynthesisTime=None,
                     astTransformAvailable=False,
                     diffSnippet=DiffSnippet(
-                        original=f"import {dep.name}",
-                        replacement=f"import {dep.name}  # verified",
+                        original=f"- {dep.name}=={dep.specifier}",
+                        replacement=f"+ {dep.name}>={fixed_ver}",
                     ),
                 )
 
-            status = "Verified" if risk_severity == "Low" else "Failed" if risk_severity == "High" else "Not tested"
+            # Status defaults to "Not tested" until empirical sandbox verification executes
+            status = "Not tested"
+
+            target_version = (
+                known_flag["target"]
+                if known_flag
+                else (migration_rec.targetPackages[0] if migration_rec and migration_rec.targetPackages else dep.specifier)
+            )
 
             discovered = DiscoveredDependency(
                 id=f"dep-{item['index'] + 1}-{dep.name}",
                 name=dep.name,
                 ecosystem=dep.ecosystem,
                 version=dep.specifier,
-                targetVersion=known_flag["target"] if known_flag else dep.specifier,
+                targetVersion=target_version,
                 riskSeverity=risk_severity,
                 riskReason=risk_reason,
                 evidenceSource=f"{dep.manifest_path} (AST mapped)",
                 declaredManifest=dep.manifest_path,
-                astCallSites=len(occurrences) or 1,
-                astFiles=len(affected_files) or 1,
+                line_number=dep.line_number,
+                astCallSites=len(occurrences),
+                astFiles=len(affected_files),
                 status=status,
                 statusDetails=risk_reason,
                 codeSnippets=code_snippets,
@@ -341,14 +505,25 @@ class DependencyAnalyzer:
                 migrationRecommendation=migration_rec,
                 aiConfidence=ai_finding.confidence if ai_finding else None,
                 isDirect=dep.is_direct,
+                isDev=dep.is_dev,
+                isCommented=dep.is_commented,
             )
             final_dependencies.append(discovered)
 
-        # 7. Compute Summary
+        # 8. Compute Summary
         high_risk_count = sum(1 for d in final_dependencies if d.riskSeverity == "High")
         needs_review_count = sum(1 for d in final_dependencies if d.riskSeverity == "Needs Review")
         healthy_count = sum(1 for d in final_dependencies if d.riskSeverity == "Low")
         total_call_sites = sum(d.astCallSites for d in final_dependencies)
+
+        # Count actual scanned unique code and manifest files
+        unique_scanned_files = set()
+        for f in repo_dir.rglob("*"):
+            if f.is_file() and not any(part in {".git", "node_modules", ".venv", "venv", "__pycache__"} for part in f.parts):
+                if f.suffix in {".py", ".ts", ".js", ".tsx", ".jsx", ".toml", ".txt", ".json", ".ini", ".cfg", ".j2"}:
+                    unique_scanned_files.add(str(f))
+
+        health_score = max(0, min(100, 100 - (high_risk_count * 20) - (needs_review_count * 5)))
 
         summary = ScanSummary(
             total=len(final_dependencies),
@@ -356,8 +531,9 @@ class DependencyAnalyzer:
             needsReview=needs_review_count,
             healthy=healthy_count,
             astCallSites=total_call_sites,
-            scannedFilesCount=len(list(repo_dir.rglob("*.py"))) + len(list(repo_dir.rglob("*.ts"))) + 1,
-            verifiedPassing=healthy_count,
+            scannedFilesCount=len(unique_scanned_files) or 1,
+            verifiedPassing=0,
+            healthScore=health_score,
         )
 
         return (
@@ -368,3 +544,4 @@ class DependencyAnalyzer:
             ai_model_used,
             limitations,
         )
+
