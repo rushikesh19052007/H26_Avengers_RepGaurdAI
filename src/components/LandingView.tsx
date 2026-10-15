@@ -1,15 +1,13 @@
 import React, { useState } from 'react';
 import { WorkspaceView } from '../types';
 import { DepGuardLogo } from './DepGuardLogo';
-import { useBackendHealth } from '../services/depguardApi';
 
 interface LandingViewProps {
   onStartScan: (repoUrl?: string, file?: File | null) => void;
-  onSelectView: (view: WorkspaceView) => void;
+  onSelectView?: (view: WorkspaceView) => void;
 }
 
-export const LandingView: React.FC<LandingViewProps> = ({ onStartScan, onSelectView }) => {
-  const { isOnline, serviceInfo, isChecking, refetch, baseUrl } = useBackendHealth();
+export const LandingView: React.FC<LandingViewProps> = ({ onStartScan }) => {
   const [repoUrl, setRepoUrl] = useState('');
   const [isVerifying, setIsVerifying] = useState(false);
   const [verifiedSuccess, setVerifiedSuccess] = useState(false);
@@ -48,10 +46,6 @@ export const LandingView: React.FC<LandingViewProps> = ({ onStartScan, onSelectV
     }
   };
 
-  const handleSelectSample = (sampleUrl: string) => {
-    setRepoUrl(sampleUrl);
-    setVerifiedSuccess(true);
-  };
 
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
@@ -74,103 +68,28 @@ export const LandingView: React.FC<LandingViewProps> = ({ onStartScan, onSelectV
     <div className="bg-background min-h-screen flex flex-col selection:bg-primary-container selection:text-on-primary">
       {/* Top Navbar */}
       <header className="fixed top-0 left-0 right-0 z-50 bg-surface/80 backdrop-blur-xl border-b border-surface-container-high/60 shadow-[0_1px_8px_rgba(0,0,0,0.03)]">
-        <div className="h-14 max-w-7xl mx-auto px-6 lg:px-12 flex items-center justify-between">
-          <div className="flex items-center gap-4">
-            <div className="flex items-center gap-2">
-              <DepGuardLogo size={28} />
-              <div className="flex flex-col">
-                <div className="flex items-center gap-1.5">
-                  <span className="text-[16px] text-on-surface font-semibold tracking-tight">
-                    DepGuard AI
-                  </span>
-                  <span className="font-mono text-[11px] px-1 py-0.5 rounded bg-surface-container text-on-surface-variant font-medium">
-                    v1.4.0
-                  </span>
-                </div>
-                <span className="text-[12px] text-on-surface-variant leading-none">
-                  Dependency Resilience Engine
+        <div className="h-16 max-w-7xl mx-auto px-6 lg:px-12 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <DepGuardLogo size={36} />
+            <div className="flex flex-col">
+              <div className="flex items-center gap-2">
+                <span className="text-[18px] md:text-[20px] text-on-surface font-bold tracking-tight">
+                  DepGuard AI
+                </span>
+                <span className="font-mono text-[11px] px-1.5 py-0.5 rounded bg-surface-container text-on-surface-variant font-medium">
+                  v1.4.0
                 </span>
               </div>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-6">
-            <nav className="hidden md:flex items-center gap-2" aria-label="Landing navigation">
-              <button
-                onClick={() => onSelectView('overview')}
-                className="px-3 py-1 text-[13px] bg-surface-container text-on-surface font-medium rounded-lg hover:bg-surface-container-high transition-colors cursor-pointer"
-              >
-                Overview
-              </button>
-              <button
-                onClick={() => onSelectView('help-and-docs')}
-                className="px-3 py-1 text-[13px] text-on-surface-variant hover:text-on-surface hover:bg-surface-container-low rounded-lg transition-colors cursor-pointer"
-              >
-                Hacktoberfest &apos;26 Docs
-              </button>
-              <button
-                onClick={() => onSelectView('activity-logs')}
-                className="px-3 py-1 text-[13px] text-on-surface-variant hover:text-on-surface hover:bg-surface-container-low rounded-lg transition-colors cursor-pointer"
-              >
-                Community
-              </button>
-            </nav>
-            {/* Backend Connection Indicator & Swagger Link */}
-            <div className="flex items-center gap-2">
-              <a
-                href={`${baseUrl}/docs`}
-                target="_blank"
-                rel="noreferrer"
-                className="hidden lg:inline-flex items-center gap-1 px-2.5 py-1 rounded-full font-mono text-[11px] text-on-surface-variant hover:text-primary hover:bg-surface-container transition-colors border border-surface-container-high/60"
-                title="Open Interactive Swagger UI Docs (http://127.0.0.1:8000/docs)"
-              >
-                <span>Swagger Docs</span>
-                <span className="material-symbols-outlined text-[13px]">open_in_new</span>
-              </a>
-              <button
-                onClick={refetch}
-                type="button"
-                className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-mono border transition-all cursor-pointer shadow-xs ${
-                  isOnline
-                    ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-700 hover:bg-emerald-500/20'
-                    : 'bg-amber-500/10 border-amber-500/30 text-amber-700 hover:bg-amber-500/20'
-                }`}
-                title={
-                  isOnline
-                    ? `Backend Online at ${baseUrl} (${serviceInfo?.service || 'DepGuard AI'}). Click to recheck.`
-                    : `Backend Offline (${baseUrl}). Running in Standalone Demo Mode. Click to recheck.`
-                }
-              >
-                <span
-                  className={`w-2 h-2 rounded-full ${
-                    isOnline ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'
-                  }`}
-                />
-                <span>
-                  {isChecking
-                    ? 'Checking API...'
-                    : isOnline
-                    ? 'API: 8000 Online'
-                    : 'API: Standalone Mode'}
-                </span>
-              </button>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => onSelectView('settings')}
-                className="w-8 h-8 rounded-full bg-primary flex items-center justify-center text-on-primary shadow-xs hover:opacity-90 transition-opacity cursor-pointer"
-                title="Profile Settings"
-              >
-                <span className="material-symbols-outlined text-[18px]">person</span>
-              </button>
+              <span className="text-[12px] text-on-surface-variant leading-none">
+                Dependency Resilience Engine
+              </span>
             </div>
           </div>
         </div>
       </header>
 
       {/* Main Container */}
-      <main className="w-full pt-14 flex-1 max-w-7xl mx-auto px-6 lg:px-12 flex flex-col justify-center">
+      <main className="w-full pt-16 flex-1 max-w-7xl mx-auto px-6 lg:px-12 flex flex-col justify-center">
         <div className="flex flex-col w-full py-8 lg:py-12">
           {/* Hero Section */}
           <div className="relative w-full max-w-5xl mx-auto flex flex-col items-center">
@@ -445,43 +364,6 @@ export const LandingView: React.FC<LandingViewProps> = ({ onStartScan, onSelectV
               </div>
             </div>
 
-            {/* Quick Start Sample Anchor */}
-            <div className="w-full mt-6 flex flex-col md:flex-row items-center justify-between gap-3 p-3.5 rounded-xl bg-surface-container-low shadow-xs border border-surface-container-high/60">
-              <div className="flex items-center gap-3">
-                <div className="w-7 h-7 rounded-full bg-primary flex items-center justify-center text-on-primary shrink-0 shadow-xs">
-                  <span className="material-symbols-outlined text-[16px]">bolt</span>
-                </div>
-                <div className="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-2 flex-wrap">
-                  <span className="text-[13px] text-on-surface font-medium">
-                    Try public repository:
-                  </span>
-                  <div className="flex items-center gap-1.5 flex-wrap">
-                    <button
-                      onClick={() => handleSelectSample('https://github.com/pallets/flask')}
-                      type="button"
-                      className="inline-flex items-center gap-1 font-mono text-[11px] px-2 py-0.5 rounded bg-surface hover:bg-surface-container-highest text-primary font-semibold transition-colors shadow-xs w-fit border border-surface-container-high cursor-pointer"
-                    >
-                      <span>pallets/flask</span>
-                      <span className="material-symbols-outlined text-[13px]">north_east</span>
-                    </button>
-                    <button
-                      onClick={() => handleSelectSample('https://github.com/psf/requests')}
-                      type="button"
-                      className="inline-flex items-center gap-1 font-mono text-[11px] px-2 py-0.5 rounded bg-surface hover:bg-surface-container-highest text-primary font-semibold transition-colors shadow-xs w-fit border border-surface-container-high cursor-pointer"
-                    >
-                      <span>psf/requests</span>
-                      <span className="material-symbols-outlined text-[13px]">north_east</span>
-                    </button>
-                  </div>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-3">
-                <span className="font-mono text-[11px] text-on-surface-variant hidden sm:inline-block">
-                  Fast AST Extraction • No API Keys Required
-                </span>
-              </div>
-            </div>
 
             {/* Privacy & Safe Execution Notice */}
             <div className="w-full mt-5 px-2 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 text-on-surface-variant">
